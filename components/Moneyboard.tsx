@@ -27,26 +27,14 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
 
 
     // ───── GASTO ─────
-    if (mode === 'expense') {
+    if (mode === 'expense' || mode === 'income') {
       if (!selectedCat) {return toast.error("Selecciona una categoría");}
       const { error: err } = await supabase.from('expenses').insert([{
         amount: numAmount,
         account_id: selectedAcc,
         category_id: selectedCat,
-        description: "Gasto registrado"
-      }]);
-      error = err;
-    } 
-
-      // ───── INGRESO ─────
-    else if (mode === 'income') {
-      if (!selectedCat) return toast.error("Selecciona una categoría de ingreso");
-      // Importante: Guardamos en la tabla que definiste para ingresos
-      const { error: err } = await supabase.from('expenses').insert([{
-        amount: numAmount,
-        account_id: selectedAcc,
-        category_id: selectedCat,
-        description: "Ingreso registrado"
+        type: mode, 
+        description: mode === 'income' ? "Ingreso de capital" : "Gasto registrado"
       }]);
       error = err;
     } 
