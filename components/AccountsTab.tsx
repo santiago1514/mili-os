@@ -17,7 +17,7 @@ export default function AccountsTab({ accounts }: AccountsTabProps) {
     setLoadingHistory(true);
     // Obtenemos gastos y transferencias vinculados a esta cuenta
     const { data: moveRes } = await supabase
-    .from('expenses')
+    .from('transactions')
     .select('*, categories(name, emoji)')
     .eq('account_id', accountId);
 

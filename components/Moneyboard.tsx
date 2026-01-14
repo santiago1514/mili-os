@@ -27,17 +27,22 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
 
 
     // ───── GASTO ─────
-    if (mode === 'expense' || mode === 'income') {
-      if (!selectedCat) {return toast.error("Selecciona una categoría");}
-      const { error: err } = await supabase.from('expenses').insert([{
-        amount: numAmount,
-        account_id: selectedAcc,
-        category_id: selectedCat,
-        type: mode, 
-        description: mode === 'income' ? "Ingreso de capital" : "Gasto registrado"
-      }]);
-      error = err;
-    } 
+
+  if (mode === 'expense' || mode === 'income') {
+    const signedAmount = mode === 'expense' ? -numAmount : numAmount;
+
+    const { error: err } = await supabase.from('transactions').insert([{
+      amount: signedAmount,
+      account_id: selectedAcc,
+      category_id: selectedCat,
+      description: mode === 'income' ? 'Ingreso' : 'Gasto'
+    }]);
+
+    error = err;
+  }
+
+
+
 
       // ───── TRANSFERENCIA ─────
     else if (mode === 'transfer') {
