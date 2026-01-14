@@ -17,25 +17,28 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
   const [selectedCat, setSelectedCat] = useState("");
 
   const handleAction = async () => {
-    const numAmount = parseFloat(amount);
-    
+    const numAmount = Number(amount);
+      
     // Validaciones básicas
-    if (!amount || numAmount <= 0) return toast.error("Ingresa un monto válido");
-    if (!selectedAcc) return toast.error("Selecciona una cuenta");
+    if (!amount || numAmount <= 0) {return toast.error("Ingresa un monto válido");}
+    if (!selectedAcc) {return toast.error("Selecciona una cuenta");}
 
-    let error;
+  let error = null;
 
+
+    // ───── GASTO ─────
     if (mode === 'expense') {
-      if (!selectedCat) return toast.error("Selecciona una categoría");
+      if (!selectedCat) {return toast.error("Selecciona una categoría");}
       const { error: err } = await supabase.from('expenses').insert([{
         amount: numAmount,
         account_id: selectedAcc,
         category_id: selectedCat,
-        type: 'expense',
         description: "Gasto registrado"
       }]);
       error = err;
     } 
+
+      // ───── INGRESO ─────
     else if (mode === 'income') {
       if (!selectedCat) return toast.error("Selecciona una categoría de ingreso");
       // Importante: Guardamos en la tabla que definiste para ingresos
@@ -43,11 +46,12 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
         amount: numAmount,
         account_id: selectedAcc,
         category_id: selectedCat,
-        type: 'income',
-        description: "Ingreso de capital"
+        description: "Ingreso registrado"
       }]);
       error = err;
     } 
+
+      // ───── TRANSFERENCIA ─────
     else if (mode === 'transfer') {
       if (!toAcc || selectedAcc === toAcc) return toast.error("Selecciona cuentas distintas");
       const { error: err } = await supabase.from('transfers').insert([{
@@ -64,9 +68,10 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
       setSelectedCat("");
       onUpdate?.(); // Esto refresca balances y actividad en page.tsx
     } else {
-      console.error(error);
+      console.error("SUPABASE ERROR:", error);
       toast.error("Error en la base de datos");
     }
+    
   };
 
   const handleKey = (key: string) => {
