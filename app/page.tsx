@@ -3,7 +3,9 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabase";
 import { formatTime } from "../lib/timer-utils";
-
+import { DayPicker } from 'react-day-picker';
+import TimeGrid from "../components/TimeGrid";
+import 'react-day-picker/dist/style.css';
 import DailyStats from "../components/DailyStats";
 import Moneyboard from "../components/Moneyboard";
 import QuickNotes from "../components/QuickNotes";
@@ -23,6 +25,7 @@ export default function Home() {
   const [dailyLogs, setDailyLogs] = useState<any[]>([]);
   const [dailyExpenses, setDailyExpenses] = useState<any[]>([]);
   const [dailyTransfers, setDailyTransfers] = useState<any[]>([]);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
 
   const [activeLog, setActiveLog] = useState<any>(null);
   const [seconds, setSeconds] = useState(0);
@@ -32,20 +35,28 @@ export default function Home() {
 
   // --- CARGA DE DATOS ---
   const fetchTodos = async () => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+    const todayStart = new Date();
+    const startOfDay = new Date(selectedDate);
+    todayStart.setHours(0, 0, 0, 0);
 
-  // Traemos las tareas con una lógica de filtrado inteligente
-  const { data, error } = await supabase
-    .from("todos")
-    .select("*")
-    // Filtro: (is_completed es false) O (is_completed es true Y creado hoy)
-    .or(`is_completed.eq.false,and(is_completed.eq.true,created_at.gte.${today.toISOString()})`)
-    .order("created_at", { ascending: false });
+    const endOfDay = new Date(selectedDate);
+    endOfDay.setHours(23, 59, 59, 999);
 
-  if (!error) {
-    setTodos(data || []);
-  }
+    // Traemos las tareas con una lógica de filtrado inteligente
+    const { data, error } = await supabase
+      .from("todos")
+      .select("*")
+      .gte('created_at', startOfDay.toISOString())
+      .lte('created_at', endOfDay.toISOString())
+      // Filtro: (is_completed es false) O (is_completed es true Y creado hoy)
+      .or(`is_completed.eq.false,and(is_completed.eq.true,created_at.gte.${todayStart.toISOString()})`)
+      .order("created_at", { ascending: false });
+
+    if (!error) {
+      setTodos(data || []);
+    } else {
+      console.error("Error cargando misiones:", error);
+    }
 };
 
   const refreshDailyData = async () => {
@@ -53,6 +64,8 @@ export default function Home() {
     today.setHours(0, 0, 0, 0);
     const todayISO = today.toISOString();
 
+    const { data, error } = await supabase .from("time_logs") .select("*, categories(*)") .or(`end_time.is.null,end_time.gte.${today.toISOString()}`) 
+    .order("start_time", { ascending: true });
     const [logs, expenses, transfers, accRes, catRes] = await Promise.all([
       supabase.from("time_logs").select("*").gte("start_time", todayISO),
       supabase.from("expenses").select("*, categories(name, emoji), accounts(name)").gte("created_at", todayISO).order("created_at", { ascending: false }),
@@ -66,6 +79,7 @@ export default function Home() {
     setDailyTransfers(transfers.data || []);
     if (accRes.data) setAccounts(accRes.data);
     if (catRes.data) setCategories(catRes.data);
+    if (!error) setDailyLogs(data || []);
   };
 
   useEffect(() => {
@@ -91,11 +105,45 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [activeLog]);
 
+  useEffect(() => {
+    // Suscripción en tiempo real
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+        refreshDailyData(); // Se actualiza solo sin recargar la página
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
   // --- HANDLERS ---
   const handleStartTracking = async (categoryId: string) => {
-    if (activeLog) await handleStopTracking();
-    const { data, error } = await supabase.from("time_logs").insert([{ category_id: categoryId, start_time: new Date().toISOString() }]).select().single();
-    if (!error) { setActiveLog(data); setSeconds(0); }
+    const now = new Date().toISOString();
+    // 1. Si hay una actividad corriendo, la detenemos primero
+    if (activeLog) {
+      const startTime = new Date(activeLog.start_time);
+      const endTime = new Date(now);
+      const durationMs = endTime.getTime() - startTime.getTime();
+
+      // REGLA: Si duró menos de 1 minuto (60,000 ms), la borramos en lugar de guardarla
+      if (durationMs < 60000) {
+        await supabase.from("time_logs").delete().eq("id", activeLog.id);
+      } else {
+        // La cerramos normalmente
+        await supabase
+          .from("time_logs")
+          .update({ end_time: now })
+          .eq("id", activeLog.id);
+      }
+    }
+
+    // 2. Iniciamos la nueva tarea
+    const { data, error } = await supabase .from("time_logs") .insert([{ category_id: categoryId, start_time: now, created_at: now }])
+    .select()
+    .single();
+
+    if (!error) { setActiveLog(data); refreshDailyData(); }
   };
 
   const handleStopTracking = async () => {
@@ -148,6 +196,17 @@ export default function Home() {
               ))}
             </div>
           </div>
+
+          <div className="bg-zinc-900/50 p-4 rounded-[2rem] border border-zinc-800">
+          <DayPicker
+            mode="single"
+            selected={selectedDate}
+            onSelect={(date) => date && setSelectedDate(date)}
+            className="text-white custom-calendar"
+          />
+        </div>
+
+        <TimeGrid logs={dailyLogs} categories={categories} />
 
           <QuickNotes />
         </div>

@@ -56,8 +56,6 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
       setAmount("");
       setDescription("");
       setSelectedCat("");
-      
-      // Esta función recarga el historial y balances en Page.tsx inmediatamente
       if (onUpdate) onUpdate(); 
     } else {
       console.error("SUPABASE ERROR:", error);
