@@ -16,9 +16,9 @@ import ActivityFeed from "../components/ActivityFeed";
 import AccountsTab from "../components/AccountsTab";
 
 import { Toaster } from "react-hot-toast";
-import toast from "react-hot-toast";
 
 export default function Home() {
+  // --- ESTADOS ---
   const [categories, setCategories] = useState<any[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [todos, setTodos] = useState<any[]>([]);
@@ -26,50 +26,39 @@ export default function Home() {
   const [dailyExpenses, setDailyExpenses] = useState<any[]>([]);
   const [dailyTransfers, setDailyTransfers] = useState<any[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-
   const [activeLog, setActiveLog] = useState<any>(null);
   const [seconds, setSeconds] = useState(0);
-
   const [activeTab, setActiveTab] = useState<"feed" | "accounts">("feed");
   const [loading, setLoading] = useState(true);
 
-  // --- CARGA DE DATOS ---
+  // --- 1. CÁLCULO DE FECHAS GLOBALES ---
+  // Esto permite que tanto las consultas como el diseño usen el mismo tiempo
+  const startOfSelected = new Date(selectedDate);
+  startOfSelected.setHours(0, 0, 0, 0);
+  
+  const endOfSelected = new Date(selectedDate);
+  endOfSelected.setHours(23, 59, 59, 999);
+
+  // --- 2. FUNCIONES DE CARGA (FETCH) ---
   const fetchTodos = async () => {
-    const todayStart = new Date();
-    const startOfDay = new Date(selectedDate);
-    todayStart.setHours(0, 0, 0, 0);
-
-    const endOfDay = new Date(selectedDate);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    // Traemos las tareas con una lógica de filtrado inteligente
     const { data, error } = await supabase
       .from("todos")
       .select("*")
-      .gte('created_at', startOfDay.toISOString())
-      .lte('created_at', endOfDay.toISOString())
-      // Filtro: (is_completed es false) O (is_completed es true Y creado hoy)
-      .or(`is_completed.eq.false,and(is_completed.eq.true,created_at.gte.${todayStart.toISOString()})`)
+      // Lógica: Trae lo del día seleccionado O cualquier cosa incompleta de antes
+      .or(`and(created_at.gte.${startOfSelected.toISOString()},created_at.lte.${endOfSelected.toISOString()}),is_completed.eq.false`)
       .order("created_at", { ascending: false });
 
-    if (!error) {
-      setTodos(data || []);
-    } else {
-      console.error("Error cargando misiones:", error);
-    }
-};
+    if (!error) setTodos(data || []);
+  };
 
   const refreshDailyData = async () => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayISO = today.toISOString();
+    const startISO = startOfSelected.toISOString();
+    const endISO = endOfSelected.toISOString();
 
-    const { data, error } = await supabase .from("time_logs") .select("*, categories(*)") .or(`end_time.is.null,end_time.gte.${today.toISOString()}`) 
-    .order("start_time", { ascending: true });
     const [logs, expenses, transfers, accRes, catRes] = await Promise.all([
-      supabase.from("time_logs").select("*").gte("start_time", todayISO),
-      supabase.from("expenses").select("*, categories(name, emoji), accounts(name)").gte("created_at", todayISO).order("created_at", { ascending: false }),
-      supabase.from("transfers").select(`*, from:from_account_id(name), to:to_account_id(name)`).gte("created_at", todayISO).order("created_at", { ascending: false }),
+      supabase.from("time_logs").select("*").gte("start_time", startISO).lte("start_time", endISO),
+      supabase.from("expenses").select("*, categories(name, emoji), accounts(name)").gte("created_at", startISO).lte("created_at", endISO).order("created_at", { ascending: false }),
+      supabase.from("transfers").select(`*, from:from_account_id(name), to:to_account_id(name)`).gte("created_at", startISO).lte("created_at", endISO).order("created_at", { ascending: false }),
       supabase.from("accounts").select("*").order("name"),
       supabase.from("categories").select("*").order("name")
     ]);
@@ -79,14 +68,58 @@ export default function Home() {
     setDailyTransfers(transfers.data || []);
     if (accRes.data) setAccounts(accRes.data);
     if (catRes.data) setCategories(catRes.data);
-    if (!error) setDailyLogs(data || []);
   };
 
+  // --- 3. HANDLERS (ACCIONES) ---
+  const handleRollover = async (todoId: string) => {
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from("todos")
+      .update({ created_at: now })
+      .eq("id", todoId);
+
+    if (!error) fetchTodos();
+  };
+
+  const handleStartTracking = async (categoryId: string) => {
+    try {
+      const now = new Date().toISOString();
+      if (activeLog?.id) {
+        const startTime = new Date(activeLog.start_time).getTime();
+        const durationMs = Date.now() - startTime;
+        if (durationMs < 60000) {
+          await supabase.from("time_logs").delete().eq("id", activeLog.id);
+        } else {
+          await supabase.from("time_logs").update({ end_time: now }).eq("id", activeLog.id);
+        }
+      }
+
+      const { data, error } = await supabase
+        .from("time_logs")
+        .insert([{ category_id: categoryId, start_time: now }])
+        .select();
+
+      if (error) throw error;
+      if (data) {
+        setActiveLog(data[0]);
+        refreshDailyData();
+      }
+    } catch (err) {
+      console.error("Error Tracking:", err);
+    }
+  };
+
+  const handleStopTracking = async () => {
+    if (!activeLog) return;
+    const { error } = await supabase.from("time_logs").update({ end_time: new Date().toISOString() }).eq("id", activeLog.id);
+    if (!error) { setActiveLog(null); setSeconds(0); refreshDailyData(); }
+  };
+
+  // --- 4. EFECTOS (RE-RENDERIZADO) ---
   useEffect(() => {
     const init = async () => {
       setLoading(true);
-      await refreshDailyData();
-      await fetchTodos();
+      await Promise.all([refreshDailyData(), fetchTodos()]);
       
       const { data } = await supabase.from("time_logs").select("*").is("end_time", null).order("start_time", { ascending: false }).limit(1).maybeSingle();
       if (data) {
@@ -97,7 +130,7 @@ export default function Home() {
       setLoading(false);
     };
     init();
-  }, []);
+  }, [selectedDate]); // Se recarga todo cuando cambias la fecha en el calendario
 
   useEffect(() => {
     if (!activeLog) return;
@@ -105,75 +138,16 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [activeLog]);
 
-  useEffect(() => {
-    // Suscripción en tiempo real
-    const channel = supabase
-      .channel('schema-db-changes')
-      .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-        refreshDailyData(); // Se actualiza solo sin recargar la página
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, []);
-
-  // --- HANDLERS ---
-  const handleStartTracking = async (categoryId: string) => {
-    try {
-      const now = new Date().toISOString();
-
-      // 1. Detener actividad previa si existe
-      if (activeLog?.id) {
-        const startTime = new Date(activeLog.start_time).getTime();
-        const durationMs = Date.now() - startTime;
-
-        if (durationMs < 60000) {
-          await supabase.from("time_logs").delete().eq("id", activeLog.id);
-        } else {
-          await supabase.from("time_logs").update({ end_time: now }).eq("id", activeLog.id);
-        }
-      }
-
-      // 2. Insertar nueva actividad simplificado
-      const { data, error: insertError } = await supabase
-        .from("time_logs")
-        .insert([{ 
-          category_id: categoryId, 
-          start_time: now
-          // Quitamos created_at para evitar el error de columna no encontrada
-        }])
-        .select();
-
-      if (insertError) throw insertError;
-
-      // 3. Actualizar estados
-      if (data && data.length > 0) {
-        setActiveLog(data[0]);
-        if (typeof refreshDailyData === 'function') refreshDailyData();
-      }
-
-    } catch (err: any) {
-      // Esto nos dirá qué pasa realmente en lugar de {}
-      console.error("Error detallado:", err.message || err);
-    }
-  };
-
-  const handleStopTracking = async () => {
-    if (!activeLog) return;
-    const { error } = await supabase.from("time_logs").update({ end_time: new Date().toISOString() }).eq("id", activeLog.id);
-    if (!error) { setActiveLog(null); setSeconds(0); refreshDailyData(); }
-  };
-
   if (loading && categories.length === 0) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="text-purple-500 animate-pulse font-black italic text-2xl tracking-tighter">LOADING MILI OS...</div>
+        <div className="text-purple-500 animate-pulse font-black italic text-2xl">LOADING MILI OS...</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-black text-white p-4 md:p-8 font-sans selection:bg-purple-500/30">
+    <div className="min-h-screen bg-black text-white p-4 md:p-8 font-sans">
       <Toaster position="bottom-center" />
 
       <header className="max-w-[1600px] mx-auto mb-10">
@@ -185,10 +159,9 @@ export default function Home() {
 
       <main className="max-w-[1600px] mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         
-        {/* COLUMNA IZQUIERDA: Stats y Control de Tiempo */}
+        {/* COLUMNA IZQUIERDA */}
         <div className="lg:col-span-3 space-y-8">
           <DailyStats logs={dailyLogs} categories={categories} accounts={accounts} />
-          
           <Pomodoro categories={categories} />
 
           <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-[2.5rem] shadow-2xl">
@@ -198,53 +171,65 @@ export default function Home() {
                 <button 
                   key={cat.id}
                   onClick={() => handleStartTracking(cat.id)}
-                  className={` p-4 rounded-[2rem] transition-all duration-300 flex flex-col items-center gap-2 ${activeLog?.category_id === cat.id 
+                  className={`p-4 rounded-[2rem] transition-all duration-300 flex flex-col items-center gap-2 ${activeLog?.category_id === cat.id 
                       ? 'bg-purple-600 shadow-[0_0_20px_rgba(168,85,247,0.4)] scale-105 ring-2 ring-purple-400' 
-                      : 'bg-zinc-900/50 border border-zinc-800 hover:bg-zinc-800'}
-                  `}
+                      : 'bg-zinc-900/50 border border-zinc-800 hover:bg-zinc-800'}`}
                 >
-
                   <span className="text-2xl mb-1">{cat.emoji}</span>
-                  <span className="text-[10px] font-black uppercase tracking-tighter text-zinc-300">
-                    {cat.name}
-                  </span>
+                  <span className="text-[10px] font-black uppercase tracking-tighter text-zinc-300">{cat.name}</span>
                 </button>
               ))}
             </div>
           </div>
 
           <div className="bg-zinc-900/50 p-4 rounded-[2rem] border border-zinc-800">
-          <DayPicker
-            mode="single"
-            selected={selectedDate}
-            onSelect={(date) => date && setSelectedDate(date)}
-            className="text-white custom-calendar"
-          />
-        </div>
+            <DayPicker
+              mode="single"
+              selected={selectedDate}
+              onSelect={(date) => date && setSelectedDate(date)}
+              className="text-white custom-calendar"
+            />
+          </div>
 
-        <TimeGrid logs={dailyLogs} categories={categories} />
-
+          <TimeGrid logs={dailyLogs} categories={categories} />
           <QuickNotes />
         </div>
 
-        {/* COLUMNA CENTRAL: Misiones y Tracking Activo */}
+        {/* COLUMNA CENTRAL */}
         <div className="lg:col-span-6 space-y-8 h-full flex flex-col">
           {activeLog && (
-            <div className="p-10 bg-gradient-to-br from-purple-600 via-purple-900 to-black rounded-[3rem] border border-purple-400/20 shadow-[0_0_50px_rgba(168,85,247,0.15)] animate-in fade-in slide-in-from-top-4 duration-500">
-              <div className="flex justify-between items-start mb-4">
-                <span className="bg-purple-500/20 text-purple-300 text-[10px] px-3 py-1 rounded-full font-black uppercase tracking-widest">Sesión Activa</span>
-              </div>
-              <h2 className="text-5xl font-black mb-8 flex items-center gap-4">
+            <div className="p-10 bg-gradient-to-br from-purple-600 via-purple-900 to-black rounded-[3rem] border border-purple-400/20 shadow-xl animate-in fade-in slide-in-from-top-4 duration-500">
+              <span className="bg-purple-500/20 text-purple-300 text-[10px] px-3 py-1 rounded-full font-black uppercase tracking-widest">Sesión Activa</span>
+              <h2 className="text-5xl font-black my-6 flex items-center gap-4">
                 <span className="text-6xl">{categories.find(c => c.id === activeLog.category_id)?.emoji}</span>
                 {categories.find(c => c.id === activeLog.category_id)?.name}
               </h2>
               <div className="flex justify-between items-end">
-                <span className="text-7xl font-mono font-black tracking-tighter text-white">
-                  {formatTime(seconds)}
+                <span className="text-7xl font-mono font-black tracking-tighter">{formatTime(seconds)}</span>
+                <button onClick={handleStopTracking} className="bg-white text-black px-10 py-5 rounded-[2rem] font-black hover:bg-zinc-200 transition-colors">DETENER</button>
+              </div>
+            </div>
+          )}
+
+          {/* SECCIÓN: MISIONES DEL PASADO */}
+          {todos.filter(t => !t.is_completed && new Date(t.created_at) < startOfSelected).length > 0 && (
+            <div className="p-6 bg-orange-500/5 border border-orange-500/20 rounded-[2.5rem]">
+              <h3 className="text-orange-500 text-[10px] font-black uppercase mb-4 tracking-[0.3em] flex items-center gap-2">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute h-full w-full rounded-full bg-orange-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500"></span>
                 </span>
-                <button onClick={handleStopTracking} className="bg-white text-black px-10 py-5 rounded-[2rem] font-black hover:bg-purple-100 transition-colors shadow-xl">
-                  DETENER
-                </button>
+                Misiones del Pasado
+              </h3>
+              <div className="space-y-3">
+                {todos
+                  .filter(t => !t.is_completed && new Date(t.created_at) < startOfSelected)
+                  .map(todo => (
+                    <div key={todo.id} className="flex items-center justify-between bg-zinc-900/80 p-4 rounded-2xl border border-zinc-800/50">
+                      <span className="text-zinc-400 text-sm italic">{todo.title}</span>
+                      <button onClick={() => handleRollover(todo.id)} className="text-[9px] bg-orange-500 text-white px-4 py-2 rounded-xl font-black uppercase hover:bg-orange-400 transition-all">Traer a Hoy</button>
+                    </div>
+                  ))}
               </div>
             </div>
           )}
@@ -254,15 +239,14 @@ export default function Home() {
           </div>
         </div>
 
-        {/* COLUMNA DERECHA: Finanzas e Historial */}
+        {/* COLUMNA DERECHA */}
         <div className="lg:col-span-3 space-y-8 h-full flex flex-col">
           <Gamification todos={todos} />
-          
           <Moneyboard categories={categories} accounts={accounts} onUpdate={refreshDailyData} />
 
           <div className="flex bg-zinc-900 p-1.5 rounded-[1.5rem] border border-zinc-800">
-            <button onClick={() => setActiveTab("feed")} className={`flex-1 py-2.5 rounded-[1.2rem] text-[10px] font-black transition-all ${activeTab === "feed" ? "bg-white text-black shadow-lg" : "text-zinc-500 hover:text-zinc-300"}`}>HISTORIAL</button>
-            <button onClick={() => setActiveTab("accounts")} className={`flex-1 py-2.5 rounded-[1.2rem] text-[10px] font-black transition-all ${activeTab === "accounts" ? "bg-white text-black shadow-lg" : "text-zinc-500 hover:text-zinc-300"}`}>CUENTAS</button>
+            <button onClick={() => setActiveTab("feed")} className={`flex-1 py-2.5 rounded-[1.2rem] text-[10px] font-black ${activeTab === "feed" ? "bg-white text-black" : "text-zinc-500"}`}>HISTORIAL</button>
+            <button onClick={() => setActiveTab("accounts")} className={`flex-1 py-2.5 rounded-[1.2rem] text-[10px] font-black ${activeTab === "accounts" ? "bg-white text-black" : "text-zinc-500"}`}>CUENTAS</button>
           </div>
 
           <div className="flex-1 min-h-[400px]">
