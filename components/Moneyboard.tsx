@@ -15,36 +15,31 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
   const [selectedAcc, setSelectedAcc] = useState("");
   const [toAcc, setToAcc] = useState("");
   const [selectedCat, setSelectedCat] = useState("");
+  const [description, setDescription] = useState("");
 
   const handleAction = async () => {
     const numAmount = Number(amount);
-      
-    // Validaciones básicas
-    if (!amount || numAmount <= 0) {return toast.error("Ingresa un monto válido");}
-    if (!selectedAcc) {return toast.error("Selecciona una cuenta");}
+    
+    // 1. Validaciones
+    if (!amount || numAmount <= 0) return toast.error("Ingresa un monto válido");
+    if (!selectedAcc) return toast.error("Selecciona una cuenta");
+    if (mode !== 'transfer' && !selectedCat) return toast.error("Selecciona una categoría");
 
-  let error = null;
+    let error = null;
 
-
-    // ───── GASTO ─────
-
-  if (mode === 'expense' || mode === 'income') {
-    const signedAmount = mode === 'expense' ? -numAmount : numAmount;
-
-    const { error: err } = await supabase.from('transactions').insert([{
-      amount: signedAmount,
-      account_id: selectedAcc,
-      category_id: selectedCat,
-      description: mode === 'income' ? 'Ingreso' : 'Gasto'
-    }]);
-
-    error = err;
-  }
-
-
-
-
-      // ───── TRANSFERENCIA ─────
+    // 2. Ejecución según el modo
+    if (mode === 'expense' || mode === 'income') {
+      // IMPORTANTE: Usamos la tabla 'expenses' que es donde configuramos el Trigger
+      const finalDescription = description || `${mode === 'income' ? 'Ingreso' : 'Gasto'} en ${categories.find(c => c.id === selectedCat)?.name}`;
+      const { error: err } = await supabase.from('expenses').insert([{
+        amount: numAmount, // El trigger se encarga de sumar o restar según el 'type'
+        account_id: selectedAcc,
+        category_id: selectedCat,
+        type: mode, 
+        description: finalDescription // <-- Usamos la descripción inteligente
+      }]);
+      error = err;
+    } 
     else if (mode === 'transfer') {
       if (!toAcc || selectedAcc === toAcc) return toast.error("Selecciona cuentas distintas");
       const { error: err } = await supabase.from('transfers').insert([{
@@ -55,16 +50,19 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
       error = err;
     }
 
+    // 3. Respuesta y Actualización de Interfaz
     if (!error) {
       toast.success(`${mode.toUpperCase()} registrado ✨`);
       setAmount("");
+      setDescription("");
       setSelectedCat("");
-      onUpdate?.(); // Esto refresca balances y actividad en page.tsx
+      
+      // Esta función recarga el historial y balances en Page.tsx inmediatamente
+      if (onUpdate) onUpdate(); 
     } else {
       console.error("SUPABASE ERROR:", error);
       toast.error("Error en la base de datos");
     }
-    
   };
 
   const handleKey = (key: string) => {
@@ -99,8 +97,8 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
       </div>
 
       {/* Pantalla de Monto */}
-      <div className="bg-black border border-zinc-800 p-6 rounded-3xl mb-4 text-right overflow-hidden shadow-inner">
-        <span className={`text-4xl font-mono font-black break-all tracking-tighter ${
+      <div className="bg-black border border-zinc-800 p-6 rounded-3xl mb-4 text-right shadow-inner">
+        <span className={`text-4xl font-mono font-black tracking-tighter ${
           mode === 'expense' ? 'text-red-500' : mode === 'income' ? 'text-green-500' : 'text-blue-500'
         }`}>
           $ {Number(amount).toLocaleString() || "0"}
@@ -109,7 +107,7 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
 
       {/* Selector de Cuentas */}
       <div className="mb-4">
-        <p className="text-[9px] font-black text-zinc-600 mb-2 uppercase tracking-[0.2em]">
+        <p className="text-[9px] font-black text-zinc-600 mb-2 uppercase tracking-widest">
           {mode === 'transfer' ? 'Origen:' : 'Cuenta:'}
         </p>
         <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
@@ -119,7 +117,7 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
               onClick={() => setSelectedAcc(acc.id)}
               className={`px-4 py-2 rounded-xl border text-[11px] font-bold whitespace-nowrap transition-all ${
                 selectedAcc === acc.id 
-                  ? 'border-white bg-white text-black scale-95' 
+                  ? 'border-white bg-white text-black' 
                   : 'border-zinc-800 text-zinc-500 hover:border-zinc-700'
               }`}
             >
@@ -129,11 +127,11 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
         </div>
       </div>
 
-      {/* Lógica de Categorías o Cuenta Destino */}
+      {/* Categorías o Cuenta Destino */}
       <div className="mb-6">
         {mode !== 'transfer' ? (
           <>
-            <p className="text-[9px] font-black text-zinc-600 mb-2 uppercase tracking-[0.2em]">Categoría:</p>
+            <p className="text-[9px] font-black text-zinc-600 mb-2 uppercase tracking-widest">Categoría:</p>
             <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
               {categories?.filter(c => c.type === mode).map(cat => (
                 <button
@@ -152,7 +150,7 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
           </>
         ) : (
           <>
-            <p className="text-[9px] font-black text-zinc-600 mb-2 uppercase tracking-[0.2em]">Destino:</p>
+            <p className="text-[9px] font-black text-zinc-600 mb-2 uppercase tracking-widest">Destino:</p>
             <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
               {accounts?.map(acc => (
                 <button
@@ -176,19 +174,31 @@ export default function Moneyboard({ categories, accounts, onUpdate }: Moneyboar
           <button
             key={k}
             onClick={() => handleKey(k.toString())}
-            className="bg-zinc-800/30 hover:bg-zinc-800 py-4 rounded-2xl font-black text-lg text-white transition-all active:scale-90 border border-transparent hover:border-zinc-700"
+            className="bg-zinc-800/30 hover:bg-zinc-800 py-4 rounded-2xl font-black text-lg text-white transition-all active:scale-95 border border-transparent hover:border-zinc-700"
           >
             {k}
           </button>
         ))}
       </div>
 
+    {/* Campo de Descripción */}
+    <div className="mb-6">
+      <p className="text-[9px] font-black text-zinc-600 mb-2 uppercase tracking-widest">Nota / Detalle:</p>
+      <input
+        type="text"
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        placeholder="Escribe un detalle..."
+        className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-xs font-bold text-white focus:outline-none focus:border-zinc-600 transition-all shadow-inner"
+      />
+    </div>
+
       <button 
         onClick={handleAction}
-        className={`w-full py-5 rounded-[1.5rem] font-black text-xs uppercase tracking-[0.3em] text-white transition-all active:scale-95 shadow-2xl ${
-          mode === 'expense' ? 'bg-red-600 shadow-red-900/20' : 
-          mode === 'income' ? 'bg-green-600 shadow-green-900/20' : 
-          'bg-blue-600 shadow-blue-900/20'
+        className={`w-full py-5 rounded-[1.5rem] font-black text-xs uppercase tracking-[0.3em] text-white transition-all active:scale-95 ${
+          mode === 'expense' ? 'bg-red-600 shadow-lg shadow-red-900/20' : 
+          mode === 'income' ? 'bg-green-600 shadow-lg shadow-green-900/20' : 
+          'bg-blue-600 shadow-lg shadow-blue-900/20'
         }`}
       >
         Confirmar {mode}

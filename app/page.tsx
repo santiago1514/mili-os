@@ -60,15 +60,17 @@ export default function Home() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const [logs, expenses, transfers] = await Promise.all([
+    const [logs, expenses, transfers, accRes] = await Promise.all([
       supabase.from("time_logs").select("*").gte("start_time", today.toISOString()),
-      supabase.from("expenses").select("*").gte("created_at", today.toISOString()),
-      supabase.from("transfers").select("*").gte("created_at", today.toISOString())
+      supabase .from("expenses") .select("*, categories(name, emoji), accounts(name)") .gte("created_at", today.toISOString()) .order("created_at", { ascending: false }),
+      supabase.from("transfers") .select(`*, from:from_account_id(name), to:to_account_id(name)`).gte("created_at", today.toISOString()).order("created_at", { ascending: false }),
+      supabase.from("accounts").select("*").order("name")
     ]);
 
     setDailyLogs(logs.data || []);
     setDailyExpenses(expenses.data || []);
     setDailyTransfers(transfers.data || []);
+    if (accRes.data) setAccounts(accRes.data);
   };
 
   const refreshData = async () => {
@@ -229,6 +231,8 @@ export default function Home() {
 
           <TodoList categories={categories} todos={todos} onUpdate={fetchTodos} />
 
+          
+
           <section className="bg-zinc-900/30 p-6 rounded-[2.5rem]">
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {categories.filter(c => c.type === "time").map(cat => (
@@ -252,7 +256,7 @@ export default function Home() {
           <Moneyboard
             categories={categories}
             accounts={accounts}
-            onUpdate={refreshData}
+            onUpdate={refreshDailyData} 
           />
 
           <div className="flex bg-zinc-900 p-1.5 rounded-full border border-zinc-800">
