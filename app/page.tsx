@@ -119,31 +119,43 @@ export default function Home() {
 
   // --- HANDLERS ---
   const handleStartTracking = async (categoryId: string) => {
-    const now = new Date().toISOString();
-    // 1. Si hay una actividad corriendo, la detenemos primero
-    if (activeLog) {
-      const startTime = new Date(activeLog.start_time);
-      const endTime = new Date(now);
-      const durationMs = endTime.getTime() - startTime.getTime();
+    try {
+      const now = new Date().toISOString();
 
-      // REGLA: Si duró menos de 1 minuto (60,000 ms), la borramos en lugar de guardarla
-      if (durationMs < 60000) {
-        await supabase.from("time_logs").delete().eq("id", activeLog.id);
-      } else {
-        // La cerramos normalmente
-        await supabase
-          .from("time_logs")
-          .update({ end_time: now })
-          .eq("id", activeLog.id);
+      // 1. Detener actividad previa si existe
+      if (activeLog?.id) {
+        const startTime = new Date(activeLog.start_time).getTime();
+        const durationMs = Date.now() - startTime;
+
+        if (durationMs < 60000) {
+          await supabase.from("time_logs").delete().eq("id", activeLog.id);
+        } else {
+          await supabase.from("time_logs").update({ end_time: now }).eq("id", activeLog.id);
+        }
       }
+
+      // 2. Insertar nueva actividad simplificado
+      const { data, error: insertError } = await supabase
+        .from("time_logs")
+        .insert([{ 
+          category_id: categoryId, 
+          start_time: now
+          // Quitamos created_at para evitar el error de columna no encontrada
+        }])
+        .select();
+
+      if (insertError) throw insertError;
+
+      // 3. Actualizar estados
+      if (data && data.length > 0) {
+        setActiveLog(data[0]);
+        if (typeof refreshDailyData === 'function') refreshDailyData();
+      }
+
+    } catch (err: any) {
+      // Esto nos dirá qué pasa realmente en lugar de {}
+      console.error("Error detallado:", err.message || err);
     }
-
-    // 2. Iniciamos la nueva tarea
-    const { data, error } = await supabase .from("time_logs") .insert([{ category_id: categoryId, start_time: now, created_at: now }])
-    .select()
-    .single();
-
-    if (!error) { setActiveLog(data); refreshDailyData(); }
   };
 
   const handleStopTracking = async () => {
@@ -186,10 +198,14 @@ export default function Home() {
                 <button 
                   key={cat.id}
                   onClick={() => handleStartTracking(cat.id)}
-                  className="flex flex-col items-center justify-center p-3 rounded-2xl bg-black border border-zinc-800 hover:border-purple-500 transition-all group active:scale-90"
+                  className={` p-4 rounded-[2rem] transition-all duration-300 flex flex-col items-center gap-2 ${activeLog?.category_id === cat.id 
+                      ? 'bg-purple-600 shadow-[0_0_20px_rgba(168,85,247,0.4)] scale-105 ring-2 ring-purple-400' 
+                      : 'bg-zinc-900/50 border border-zinc-800 hover:bg-zinc-800'}
+                  `}
                 >
+
                   <span className="text-2xl mb-1">{cat.emoji}</span>
-                  <span className="text-[7px] font-black uppercase text-zinc-500 group-hover:text-purple-400 truncate w-full text-center">
+                  <span className="text-[10px] font-black uppercase tracking-tighter text-zinc-300">
                     {cat.name}
                   </span>
                 </button>
